@@ -463,9 +463,9 @@ destroy_gvalue (gpointer data)
 }
 
 static void
-get_user_key (NMConnection *connection,
-              const char *setting_name,
-              DBusGMethodInvocation *context)
+get_secrets (NMConnection *connection,
+             const char *setting_name,
+             DBusGMethodInvocation *context)
 {
 	GtkWidget *dialog;
 
@@ -510,9 +510,9 @@ applet_dbus_connection_settings_get_secrets (NMConnectionSettings *connection,
 
 	s_con = (NMSettingConnection *) nm_connection_get_setting (applet_connection->connection,
 	                                                           "connection");
-	if (!s_con || !s_con->name || !strlen (s_con->name)) {
-		nm_warning ("Connection didn't have the required 'connection' setting, "
-		            "or the connection name was invalid.");
+	if (!s_con || !s_con->name || !strlen (s_con->name) || !s_con->type) {
+		nm_warning ("Connection didn't have a valid required '%s' setting, "
+		            "or the connection name was invalid.", NM_SETTING_CONNECTION);
 		error = nm_settings_new_error ("%s.%d - Connection didn't have required"
 		                               " 'connection' setting, or the connection"
 		                               " name was invalid.",
@@ -522,11 +522,17 @@ applet_dbus_connection_settings_get_secrets (NMConnectionSettings *connection,
 		return;
 	}
 
+	/* VPN passwords are handled by the VPN plugin's auth dialog */
+	if (!strcmp (s_con->type, "vpn")) {
+		nma_vpn_request_password (applet_connection->connection, setting_name, request_new, context);
+		return;
+	}
+
 	if (request_new) {
 		nm_info ("New secrets for %s/%s requested; ask the user",
 		         s_con->name, setting_name);
 		nm_connection_clear_secrets (applet_connection->connection);
-		get_user_key (applet_connection->connection, setting_name, context);
+		get_secrets (applet_connection->connection, setting_name, context);
 		return;
 	}
 
@@ -542,7 +548,7 @@ applet_dbus_connection_settings_get_secrets (NMConnectionSettings *connection,
 	if ((ret != GNOME_KEYRING_RESULT_OK) || (g_list_length (found_list) == 0)) {
 		nm_info ("No keyring secrets found for %s/%s; ask the user",
 		         s_con->name, setting_name);
-		get_user_key (applet_connection->connection, setting_name, context);
+		get_secrets (applet_connection->connection, setting_name, context);
 		return;
 	}
 
