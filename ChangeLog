@@ -1,3 +1,9 @@
+2008-07-31  Dan Williams  <dcbw@redhat.com>
+
+	* src/connection-editor/page-ip4.c
+		- (method_changed): tighten up UI options; disable widgets where the
+			option doesn't make sense for the IP4 method chosen
+
 2008-07-29  Dan Williams  <dcbw@redhat.com>
 
 	* src/connection-editor/page-ip4.c
@@ -11,7 +17,7 @@
 	* src/applet-device-wifi.c
 		- (wireless_device_added): disconnect from the Settings object's
 			new-connection signal when the device is destroyed to prevent
-			callbacks for invalid, removed devices
+			callbacks for invalid, removed devices (rh #457380)
 
 2008-07-28  Dan Williams  <dcbw@redhat.com>
 
