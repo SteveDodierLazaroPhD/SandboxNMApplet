@@ -1,3 +1,24 @@
+2008-08-06  Dan Williams  <dcbw@redhat.com>
+
+	* src/connection-editor/ce-page-ip4.glade
+		- Add a checkbox for 'ignore-auto-routes'
+
+	* src/connection-editor/ip4-routes-dialog.c
+	  src/connection-editor/ip4-routes-dialog.h
+	  src/connection-editor/page-ip4.c
+		- Handle route editing
+
+2008-08-06  Dan Williams  <dcbw@redhat.com>
+
+	* src/gconf-helpers/gconf-helpers.c
+	  src/gconf-helpers/gconf-helpers.h
+		- Generalize IP4 helper functions to handle both routes and addresses
+
+	* src/gconf-helpers/gconf-upgrade.c
+	  src/gconf-helpers/gconf-upgrade.h
+		- (nm_gconf_migrate_0_7_ignore_dhcp_dns, nm_gconf_migrate_0_7_vpn_routes):
+			new functions
+
 2008-08-05  Dan Williams  <dcbw@redhat.com>
 
 	* src/connection-editor/Makefile.am
