@@ -153,6 +153,38 @@ get_mandatory_string_helper (GConfClient  *client,
 	return TRUE;
 }
 
+static char *
+get_06_keyring_secret (const char *network, const char *attr_name)
+{
+	GnomeKeyringResult result;
+	GList *found_list = NULL;
+	char *secret = NULL;
+
+	/* Get the PSK out of the keyring */
+	result = gnome_keyring_find_itemsv_sync (GNOME_KEYRING_ITEM_GENERIC_SECRET,
+	                                         &found_list,
+	                                         attr_name ? attr_name : "essid",
+	                                         GNOME_KEYRING_ATTRIBUTE_TYPE_STRING,
+	                                         network,
+	                                         NULL);
+	if ((result == GNOME_KEYRING_RESULT_OK) && (g_list_length (found_list) > 0)) {
+		GnomeKeyringFound *found = (GnomeKeyringFound *) found_list->data;
+
+		secret = g_strdup (found->secret);
+		gnome_keyring_found_list_free (found_list);
+	}
+	return secret;
+}
+
+static void
+clear_06_keyring_secret (char *secret)
+{
+	if (secret) {
+		memset (secret, 0, strlen (secret));
+		g_free (secret);
+	}
+}
+
 static const struct flagnames wep_auth_algorithms[] = {
 	{ "open",   IW_AUTH_ALG_OPEN_SYSTEM },
 	{ "shared", IW_AUTH_ALG_SHARED_KEY },
@@ -161,10 +193,13 @@ static const struct flagnames wep_auth_algorithms[] = {
 
 static NMSettingWirelessSecurity *
 nm_gconf_read_0_6_wep_settings (GConfClient *client,
-						  const char *path, const char *network)
+                                const char *path,
+                                const char *network,
+                                const char *uuid,
+                                const char *id)
 {
 	NMSettingWirelessSecurity *s_wireless_sec;
-	char *auth_alg;
+	char *auth_alg, *secret = NULL;
 
 	if (!get_enum_helper (client, path, "wep_auth_algorithm", network, wep_auth_algorithms, &auth_alg))
 		return NULL;
@@ -177,6 +212,15 @@ nm_gconf_read_0_6_wep_settings (GConfClient *client,
 	              NULL);
 	g_free (auth_alg);
 
+	secret = get_06_keyring_secret (network, NULL);
+	if (secret) {
+		nm_gconf_add_keyring_item (uuid, id,
+		                           NM_SETTING_WIRELESS_SECURITY_SETTING_NAME,
+		                           NM_SETTING_WIRELESS_SECURITY_WEP_KEY0,
+		                           secret);
+		clear_06_keyring_secret (secret);
+	}
+
 	return s_wireless_sec;
 }
 
@@ -188,14 +232,27 @@ static const struct flagnames wpa_versions[] = {
 
 static NMSettingWirelessSecurity *
 nm_gconf_read_0_6_wpa_settings (GConfClient *client,
-						  const char *path, const char *network)
+                                const char *path,
+                                const char *network,
+                                const char *uuid,
+                                const char *id)
 {
 	NMSettingWirelessSecurity *s_wireless_sec = NULL;
+	char *secret = NULL;
 
 	s_wireless_sec = NM_SETTING_WIRELESS_SECURITY (nm_setting_wireless_security_new ());
 	g_object_set (s_wireless_sec, NM_SETTING_WIRELESS_SECURITY_KEY_MGMT, "wpa-psk", NULL);
 	nm_setting_wireless_security_add_proto (s_wireless_sec, "wpa");
 	nm_setting_wireless_security_add_proto (s_wireless_sec, "rsn");
+
+	secret = get_06_keyring_secret (network, NULL);
+	if (secret) {
+		nm_gconf_add_keyring_item (uuid, id,
+		                           NM_SETTING_WIRELESS_SECURITY_SETTING_NAME,
+		                           NM_SETTING_WIRELESS_SECURITY_PSK,
+		                           secret);
+		clear_06_keyring_secret (secret);
+	}
 
 	return s_wireless_sec;
 }
@@ -232,11 +289,13 @@ static NMSettingWirelessSecurity *
 nm_gconf_read_0_6_eap_settings (GConfClient *client,
                                 const char *path,
                                 const char *network,
+                                const char *uuid,
+                                const char *id,
                                 NMSetting8021x **s_8021x)
 {
 	NMSettingWirelessSecurity *wsec = NULL;
 	GSList *eaps = NULL, *ciphers = NULL, *iter;
-	char *phase2 = NULL, *identity = NULL, *anon_identity = NULL;
+	char *phase2 = NULL, *identity = NULL, *anon_identity = NULL, *secret = NULL;
 	const char *eap = NULL;
 	gboolean wep_ciphers = FALSE, wpa_ciphers = FALSE;
 
@@ -283,6 +342,15 @@ nm_gconf_read_0_6_eap_settings (GConfClient *client,
 	              NULL);
 	nm_setting_802_1x_add_eap_method (*s_8021x, eap);
 
+	secret = get_06_keyring_secret (network, NULL);
+	if (secret) {
+		nm_gconf_add_keyring_item (uuid, id,
+		                           NM_SETTING_802_1X_SETTING_NAME,
+		                           NM_SETTING_802_1X_PASSWORD,
+		                           secret);
+		clear_06_keyring_secret (secret);
+	}
+
 	/* Add phase2 if the eap method uses inner auth */
 	if (!strcmp (eap, "ttls") || !strcmp (eap, "peap")) {
 		/* If the method is actually unsupported in NM 0.7, default to mschapv2 */
@@ -293,6 +361,24 @@ nm_gconf_read_0_6_eap_settings (GConfClient *client,
 			phase2 = g_strdup ("mschapv2");
 		}
 		g_object_set (*s_8021x, NM_SETTING_802_1X_PHASE2_AUTH, phase2, NULL);
+
+		secret = get_06_keyring_secret (network, "private-key-passwd");
+		if (secret) {
+			nm_gconf_add_keyring_item (uuid, id,
+			                           NM_SETTING_802_1X_SETTING_NAME,
+			                           NM_SETTING_802_1X_PHASE2_PRIVATE_KEY_PASSWORD,
+			                           secret);
+			clear_06_keyring_secret (secret);
+		}
+	} else if (!strcmp (eap, "tls")) {
+		secret = get_06_keyring_secret (network, "private-key-passwd");
+		if (secret) {
+			nm_gconf_add_keyring_item (uuid, id,
+			                           NM_SETTING_802_1X_SETTING_NAME,
+			                           NM_SETTING_802_1X_PRIVATE_KEY_PASSWORD,
+			                           secret);
+			clear_06_keyring_secret (secret);
+		}
 	}
 
 out:
@@ -308,10 +394,12 @@ static NMSettingWirelessSecurity *
 nm_gconf_read_0_6_leap_settings (GConfClient *client,
                                  const char *path,
                                  const char *network,
+                                 const char *uuid,
+                                 const char *id,
                                  NMSetting8021x **s_8021x)
 {
 	NMSettingWirelessSecurity *s_wireless_sec = NULL;
-	char *username = NULL, *key_mgmt = NULL;
+	char *username = NULL, *key_mgmt = NULL, *secret = NULL;
 
 	if (!get_mandatory_string_helper (client, path, "leap_key_mgmt", network, &key_mgmt))
 		goto out;
@@ -320,12 +408,21 @@ nm_gconf_read_0_6_leap_settings (GConfClient *client,
 
 	s_wireless_sec = NM_SETTING_WIRELESS_SECURITY (nm_setting_wireless_security_new ());
 
+	secret = get_06_keyring_secret (network, NULL);
+
 	if (!strcmp (key_mgmt, "WPA-EAP")) {
 		g_object_set (s_wireless_sec, NM_SETTING_WIRELESS_SECURITY_KEY_MGMT, "wpa-eap", NULL);
 
 		*s_8021x = NM_SETTING_802_1X (nm_setting_802_1x_new ());
 		nm_setting_802_1x_add_eap_method (*s_8021x, "leap");
 		g_object_set (*s_8021x, NM_SETTING_802_1X_IDENTITY, username, NULL);
+
+		if (secret) {
+			nm_gconf_add_keyring_item (uuid, id,
+			                           NM_SETTING_802_1X_SETTING_NAME,
+			                           NM_SETTING_802_1X_PASSWORD,
+			                           secret);
+		}
 	} else {
 		/* Traditional LEAP */
 		g_object_set (s_wireless_sec,
@@ -333,7 +430,15 @@ nm_gconf_read_0_6_leap_settings (GConfClient *client,
 		              NM_SETTING_WIRELESS_SECURITY_AUTH_ALG, "leap",
 		              NM_SETTING_WIRELESS_SECURITY_LEAP_USERNAME, username,
 		              NULL);
+
+		if (secret) {
+			nm_gconf_add_keyring_item (uuid, id,
+			                           NM_SETTING_WIRELESS_SECURITY_SETTING_NAME,
+			                           NM_SETTING_WIRELESS_SECURITY_LEAP_PASSWORD,
+			                           secret);
+		}
 	}
+	clear_06_keyring_secret (secret);
 
 out:
 	g_free (username);
@@ -352,7 +457,7 @@ nm_gconf_read_0_6_wireless_connection (GConfClient *client,
 	NMSetting8021x *s_8021x = NULL;
 	GByteArray *ssid;
 	char *path, *network, *essid = NULL;
-	char *s;
+	char *uuid, *id;
 	int timestamp, we_cipher;
 	GSList *iter;
 	GSList *bssids = NULL;
@@ -381,13 +486,11 @@ nm_gconf_read_0_6_wireless_connection (GConfClient *client,
 				  NM_SETTING_CONNECTION_TIMESTAMP, timestamp >= 0 ? (guint64) timestamp : 0,
 				  NULL);
 
-	s = g_strdup_printf ("Auto %s", essid);
-	g_object_set (s_con, NM_SETTING_CONNECTION_ID, s, NULL);
-	g_free (s);
+	id = g_strdup_printf ("Auto %s", essid);
+	g_object_set (s_con, NM_SETTING_CONNECTION_ID, id, NULL);
 
-	s = nm_utils_uuid_generate ();
-	g_object_set (s_con, NM_SETTING_CONNECTION_UUID, s, NULL);
-	g_free (s);
+	uuid = nm_utils_uuid_generate ();
+	g_object_set (s_con, NM_SETTING_CONNECTION_UUID, uuid, NULL);
 
 	s_wireless = (NMSettingWireless *)nm_setting_wireless_new ();
 
@@ -410,18 +513,18 @@ nm_gconf_read_0_6_wireless_connection (GConfClient *client,
 		switch (we_cipher) {
 		case NM_AUTH_TYPE_WEP40:
 		case NM_AUTH_TYPE_WEP104:
-			s_wireless_sec = nm_gconf_read_0_6_wep_settings (client, path, network);
+			s_wireless_sec = nm_gconf_read_0_6_wep_settings (client, path, network, uuid, id);
 			break;
 		case NM_AUTH_TYPE_WPA_PSK_AUTO:
 		case NM_AUTH_TYPE_WPA_PSK_TKIP:
 		case NM_AUTH_TYPE_WPA_PSK_CCMP:
-			s_wireless_sec = nm_gconf_read_0_6_wpa_settings (client, path, network);
+			s_wireless_sec = nm_gconf_read_0_6_wpa_settings (client, path, network, uuid, id);
 			break;
 		case NM_AUTH_TYPE_WPA_EAP:
-			s_wireless_sec = nm_gconf_read_0_6_eap_settings (client, path, network, &s_8021x);
+			s_wireless_sec = nm_gconf_read_0_6_eap_settings (client, path, network, uuid, id, &s_8021x);
 			break;
 		case NM_AUTH_TYPE_LEAP:
-			s_wireless_sec = nm_gconf_read_0_6_leap_settings (client, path, network, &s_8021x);
+			s_wireless_sec = nm_gconf_read_0_6_leap_settings (client, path, network, uuid, id, &s_8021x);
 			break;
 		default:
 			g_warning ("Unknown NM 0.6 auth type %d on connection %s", we_cipher, dir);
@@ -459,14 +562,65 @@ nm_gconf_read_0_6_wireless_connection (GConfClient *client,
 
 	g_free (path);
 	g_free (network);
+	g_free (uuid);
+	g_free (id);
 
 	return connection;
 }
 
 static void
-nm_gconf_0_6_vpnc_settings (NMSettingVPN *s_vpn, GSList *vpn_data)
+keyring_secret_save_cb (GnomeKeyringResult result, guint32 val, gpointer user_data)
+{
+	/* Ignore */
+}
+
+static void
+vpn_helpers_save_secret (const char *vpn_uuid,
+                         const char *vpn_name,
+                         const char *secret_name,
+                         const char *secret,
+                         const char *vpn_service_name)
+{
+	char *display_name;
+	GnomeKeyringAttributeList *attrs = NULL;
+
+	display_name = g_strdup_printf ("VPN %s secret for %s/%s/" NM_SETTING_VPN_SETTING_NAME,
+	                                secret_name, vpn_name, vpn_service_name);
+
+	attrs = gnome_keyring_attribute_list_new ();
+	gnome_keyring_attribute_list_append_string (attrs,
+	                                            KEYRING_UUID_TAG,
+	                                            vpn_uuid);
+	gnome_keyring_attribute_list_append_string (attrs,
+	                                            KEYRING_SN_TAG,
+	                                            NM_SETTING_VPN_SETTING_NAME);
+	gnome_keyring_attribute_list_append_string (attrs,
+	                                            KEYRING_SK_TAG,
+	                                            secret_name);
+
+	gnome_keyring_item_create (NULL, GNOME_KEYRING_ITEM_GENERIC_SECRET,
+	                           display_name, attrs, secret, TRUE,
+	                           keyring_secret_save_cb, NULL, NULL);
+	gnome_keyring_attribute_list_free (attrs);
+	g_free (display_name);
+}
+
+
+#define NM_VPNC_SERVICE "org.freedesktop.NetworkManager.vpnc"
+#define VPNC_USER_PASSWORD "password"
+#define VPNC_GROUP_PASSWORD "group-password"
+#define VPNC_OLD_USER_PASSWORD "password"
+#define VPNC_OLD_GROUP_PASSWORD "group_password"
+
+static void
+nm_gconf_0_6_vpnc_settings (NMSettingVPN *s_vpn,
+                            GSList *vpn_data,
+                            const char *uuid,
+                            const char *id)
 {
 	GSList *iter;
+	GList *found_list;
+	GnomeKeyringResult result;
 
 	for (iter = vpn_data; iter && iter->next; iter = iter->next->next) {
 		const char *key = iter->data;
@@ -479,6 +633,43 @@ nm_gconf_0_6_vpnc_settings (NMSettingVPN *s_vpn, GSList *vpn_data)
 			/* A boolean; 0.6 treated key-without-value as "true" */
 			nm_setting_vpn_add_data_item (s_vpn, key, "yes");
 		}
+	}
+
+	/* Try to convert secrets */
+	result = gnome_keyring_find_network_password_sync (g_get_user_name (), /* user */
+	                                                   NULL,               /* domain */
+	                                                   id,                 /* server */
+	                                                   NULL,               /* object */
+	                                                   NM_VPNC_SERVICE,    /* protocol */
+	                                                   NULL,               /* authtype */
+	                                                   0,                  /* port */
+	                                                   &found_list);
+	if ((result == GNOME_KEYRING_RESULT_OK) && g_list_length (found_list)) {
+		GnomeKeyringNetworkPasswordData *data1 = found_list->data;
+		GnomeKeyringNetworkPasswordData *data2 = NULL;
+		const char *password = NULL, *group_password = NULL;
+
+		if (g_list_next (found_list))
+			data2 = g_list_next (found_list)->data;
+
+		if (!strcmp (data1->object, VPNC_OLD_GROUP_PASSWORD))
+			group_password = data1->password;
+		else if (!strcmp (data1->object, VPNC_OLD_USER_PASSWORD))
+			password = data1->password;
+
+		if (data2) {
+			if (!strcmp (data2->object, VPNC_OLD_GROUP_PASSWORD))
+				group_password = data2->password;
+			else if (!strcmp (data2->object, VPNC_OLD_USER_PASSWORD))
+				password = data2->password;
+		}
+
+		if (password)
+			vpn_helpers_save_secret (uuid, id, VPNC_USER_PASSWORD, password, NM_VPNC_SERVICE);
+		if (group_password)
+			vpn_helpers_save_secret (uuid, id, VPNC_GROUP_PASSWORD, group_password, NM_VPNC_SERVICE);
+
+		gnome_keyring_network_password_list_free (found_list);
 	}
 }
 
@@ -562,7 +753,7 @@ nm_gconf_read_0_6_vpn_connection (GConfClient *client,
 	NMSettingConnection *s_con;
 	NMSettingVPN *s_vpn;
 	NMSettingIP4Config *s_ip4 = NULL;
-	char *path, *network, *id = NULL, *service_name = NULL;
+	char *path, *network, *id = NULL, *uuid = NULL, *service_name = NULL;
 	GSList *str_routes = NULL, *vpn_data = NULL;
 
 	path = g_path_get_dirname (dir);
@@ -590,17 +781,15 @@ nm_gconf_read_0_6_vpn_connection (GConfClient *client,
 				  NM_SETTING_CONNECTION_ID, id,
 				  NM_SETTING_CONNECTION_TYPE, NM_SETTING_VPN_SETTING_NAME,
 				  NULL);
-	g_free (id);
 
-	id = nm_utils_uuid_generate ();
-	g_object_set (s_con, NM_SETTING_CONNECTION_UUID, id, NULL);
-	g_free (id);
+	uuid = nm_utils_uuid_generate ();
+	g_object_set (s_con, NM_SETTING_CONNECTION_UUID, uuid, NULL);
 
 	s_vpn = (NMSettingVPN *)nm_setting_vpn_new ();
 	g_object_set (s_vpn, NM_SETTING_VPN_SERVICE_TYPE, service_name, NULL);
 
-	if (!strcmp (service_name, "org.freedesktop.NetworkManager.vpnc"))
-		nm_gconf_0_6_vpnc_settings (s_vpn, vpn_data);
+	if (!strcmp (service_name, NM_VPNC_SERVICE))
+		nm_gconf_0_6_vpnc_settings (s_vpn, vpn_data, uuid, id);
 	else if (!strcmp (service_name, "org.freedesktop.NetworkManager.openvpn"))
 		nm_gconf_0_6_openvpn_settings (s_vpn, vpn_data);
 	else
@@ -621,6 +810,9 @@ nm_gconf_read_0_6_vpn_connection (GConfClient *client,
 	nm_connection_add_setting (connection, NM_SETTING (s_vpn));
 	if (s_ip4)
 		nm_connection_add_setting (connection, NM_SETTING (s_ip4));
+
+	g_free (id);
+	g_free (uuid);
 
 	return connection;
 }
