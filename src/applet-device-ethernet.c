@@ -77,11 +77,16 @@ ethernet_add_menu_item (NMDevice *device,
 	char *text;
 	GtkWidget *item;
 	gboolean carrier = TRUE;
+	const char *desc;
+
+	desc = nm_device_get_description (device);
+
+  // we don't show Firejail devices
+  if (g_str_has_prefix (desc, "firejail-")) {
+    return;
+  }
 
 	if (multiple_devices) {
-		const char *desc;
-
-		desc = nm_device_get_description (device);
 
 		if (connections->len > 1)
 			text = g_strdup_printf (_("Ethernet Networks (%s)"), desc);
